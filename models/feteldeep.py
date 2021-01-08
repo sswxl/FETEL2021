@@ -138,22 +138,20 @@ class FETELStack(BaseResModel):
         # linear_map_input_dim = 2 * self.context_lstm_hidden_dim + self.word_vec_dim + self.n_types + 1 #929  //464
         linear_map_input_dim = 2 * self.context_lstm_hidden_dim + self.word_vec_dim #800
 
-
         self.sigmoid= nn.Sigmoid()
         self.softmax=nn.Softmax(dim=1)
+        self.leakyReLU=nn.LeakyReLU(0.1)
         if concat_lstm:
             linear_map_input_dim += 2 * self.context_lstm_hidden_dim
         if not self.use_mlp:
             self.linear_map = nn.Linear(linear_map_input_dim, type_embed_dim, bias=False)
         else:
             mlp_hidden_dim = linear_map_input_dim // 2 if mlp_hidden_dim is None else mlp_hidden_dim
-            self.linear_map1 = nn.Linear(300, 300,True) #929,500
-            self.linear_map2 = nn.Linear(300, self.n_types)
+            self.linear_map1 = nn.Linear(300, 200,True) #929,500
+            self.linear_map2 = nn.Linear(200, self.n_types,True)
             # self.linear_map3 = nn.Linear(mlp_hidden_dim, type_embed_dim)#(500,500)
-            self.linear_map3 = nn.Linear(linear_map_input_dim, self.n_types)#(500,500)
-        # middle_dim=100
-        # self.output_linear1 = nn.Linear(linear_map_input_dim, middle_dim, bias=False)
-        # self.output_linear1 = nn.Linear(middle_dim, type_embed_dim, bias=False)
+            self.linear_map3 = nn.Linear(linear_map_input_dim, mlp_hidden_dim,True)#(500,500)
+            self.linear_map4 = nn.Linear(mlp_hidden_dim, self.n_types,True)#(500,500)
     def cross_entropy(self, predicted, truth):
         return -torch.sum(truth * torch.log(predicted + 1e-10)) \
                - torch.sum((1 - truth) * torch.log(1 - predicted + 1e-10))
@@ -167,31 +165,20 @@ class FETELStack(BaseResModel):
         context_lstm_output = context_lstm_output[back_idxs]
         name_output = modelutils.get_avg_token_vecs(self.device, self.embedding_layer, mstr_token_seqs)#16,300
 
-        # cat_output = self.dropout_layer(torch.cat((context_lstm_output, name_output, entity_vecs), dim=1)) #16,928
         cat_output = self.dropout_layer(torch.cat((context_lstm_output, name_output), dim=1)) #16,800  参数的顺序好像是反的，应该mention在前面
-        # cat_output = torch.cat((cat_output, el_probs.view(-1, 1)), dim=1)# 16,929
-        l1_output = self.linear_map1(name_output)#应该用name_output
-        # l1_output = self.lin1_bn(F.relu(l1_output))
-        # l2_output = self.linear_map2(self.dropout_layer(l1_output))
-        # l2_output = self.lin2_bn(F.relu(l2_output))
-        vq = torch.tanh(self.linear_map2(self.dropout_layer(l1_output))) #16,128
-        cq=entity_vecs+vq
-        pc=self.softmax(cq)
-        gq = self.linear_map3(self.dropout_layer(cat_output))
-        pg=self.softmax(gq) #应该用sigmoid,交叉熵需要
+
+        l1_output = torch.tanh(self.linear_map1(name_output))#应该用name_output
+        vq = torch.relu(self.linear_map2(l1_output)) #16,128   dropout
+
+        min_entity_vecs=torch.full_like(entity_vecs,-10)
+        entity_vecs=torch.where(entity_vecs<1,min_entity_vecs,entity_vecs)
+        cq=vq+entity_vecs
+        pc=cq.softmax(1)
+
+        l1_output = torch.tanh(self.linear_map3(cat_output))
+        gq = torch.relu(self.linear_map4(l1_output))
+
+        pg=gq.softmax(1) #应该用sigmoid,交叉熵需要
+        # pg=self.softmax(gq) #应该用sigmoid,交叉熵需要
         p=self.alpha_scalar*pc+(1-self.alpha_scalar)*pg
         return p
-        # if not self.use_mlp:
-        #     mention_reps = self.linear_map(self.dropout_layer(cat_output))
-        # else:
-        #     l1_output = self.linear_map1(cat_output)
-        #     l1_output = self.lin1_bn(F.relu(l1_output))
-        #     l2_output = self.linear_map2(self.dropout_layer(l1_output))
-        #     l2_output = self.lin2_bn(F.relu(l2_output))
-        #     mention_reps = self.linear_map3(self.dropout_layer(l2_output)) #16,500
-
-        # logits= s(m,t)
-        # logits = torch.matmul(mention_reps.view(-1, 1, self.type_embed_dim),
-        #                       self.type_embeddings.view(-1, self.type_embed_dim, self.n_types))#16,1,128
-        # logits = logits.view(-1, self.n_types)#16,128
-        # return logits

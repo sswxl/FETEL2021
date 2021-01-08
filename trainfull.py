@@ -15,7 +15,8 @@ def train_model():
     dropout = 0.5
     context_lstm_hidden_dim = 250
     type_embed_dim = 500
-    pred_mlp_hdim = 500
+    pred_mlp_hdim = 400
+    # pred_mlp_hdim = 400
     n_iter = 15
     lr = 0.001
     nil_rate = 0.5
@@ -34,15 +35,20 @@ def train_model():
     word_vecs_file = config.WIKI_FETEL_WORDVEC_FILE
 
     data_prefix = datafiles['anchor-train-data-prefix']
-    dev_data_pkl = data_prefix + '-dev.pkl'
-    train_data_pkl = data_prefix + '-train.pkl'
+    # dev_data_pkl = data_prefix + '-dev.pkl'
+    # trdev_data_pkl = data_prefix + '-dev.pkl'
+    train_data_pkl = 'E:/Pycoding/biye/Biye2021/data/fetel-data/results/train.pkl'
+    dev_data_pkl = 'E:/Pycoding/biye/Biye2021/data/fetel-data/results/dev.pkl'
 
+    'E:/Pycoding/biye/Biye2021/data/fetel-data'
     save_model_file = None
-    results_file = None
-    # results_file = os.path.join(config.DATA_DIR, 'result/{}-{}.txt'.format(
-    #     os.path.splitext(os.path.basename(test_mentions_file))[0], dataset))
-    noel_preds_file = datafiles['noel-typing-results']
 
+    # test_results_file = os.path.join(config.DATA_DIR, 'result/{}-{}.txt'.format('test_results_file', dataset))
+    test_results_file = 'E:/Pycoding/biye/Biye2021/data/fetel-data/results/test_results_file-figer.txt'
+    # dev_results_file = os.path.joinin(config.DATA_DIR, 'result/{}-{}.txt'.format('test_results_file', dataset))
+    dev_results_file = 'E:/Pycoding/biye/Biye2021/data/fetel-data/results/dev_results_file-figer.txt'
+
+    noel_preds_file = datafiles['noel-typing-results']
     el_candidates_file = config.EL_CANDIDATES_DATA_FILE
     print('init el with {} ...'.format(el_candidates_file), end=' ', flush=True)
     el_system = simpleel.SimpleEL.init_from_candidiate_gen_pkl(el_candidates_file)
@@ -60,8 +66,7 @@ def train_model():
         context_lstm_hidden_dim=context_lstm_hidden_dim, learning_rate=lr, batch_size=batch_size, n_iter=n_iter,
         dropout=dropout, rand_per=None, per_penalty=None, use_mlp=use_mlp, pred_mlp_hdim=pred_mlp_hdim,
         save_model_file=save_model_file, nil_rate=nil_rate, single_type_path=single_type_path,
-        stack_lstm=stack_lstm, concat_lstm=concat_lstm, results_file=results_file)
-
+        stack_lstm=stack_lstm, concat_lstm=concat_lstm, test_results_file=test_results_file,dev_results_file=dev_results_file)
 
 if __name__ == '__main__':
     import random

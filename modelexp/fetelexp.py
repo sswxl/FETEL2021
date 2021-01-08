@@ -55,8 +55,9 @@ def train_fetel(device, gres: exputils.GlobalRes, el_entityvec: ELDirectEntityVe
                 dev_samples_pkl, test_mentions_file, test_sents_file, test_noel_preds_file, type_embed_dim,
                 context_lstm_hidden_dim, learning_rate, batch_size, n_iter, dropout, rand_per, per_penalty,
                 use_mlp=False, pred_mlp_hdim=None, save_model_file=None, nil_rate=0.5,
-                single_type_path=False, stack_lstm=False, concat_lstm=False, results_file=None):
-    logging.info('result_file={}'.format(results_file))
+                single_type_path=False, stack_lstm=False, concat_lstm=False, test_results_file=None,dev_results_file = None):
+    logging.info('test_results_file={}'.format(test_results_file))
+    logging.info('dev_results_file={}'.format(dev_results_file))
     logging.info(
         'type_embed_dim={} cxt_lstm_hidden_dim={} pmlp_hdim={} nil_rate={} single_type_path={}'.format(
             type_embed_dim, context_lstm_hidden_dim, pred_mlp_hdim, nil_rate, single_type_path))
@@ -76,6 +77,10 @@ def train_fetel(device, gres: exputils.GlobalRes, el_entityvec: ELDirectEntityVe
     train_samples = datautils.load_pickle_data(train_samples_pkl)#(4932861,7)
     # mention_id, mention_str, pos_beg, pos_end, target_wid, type_ids, sent_token_ids
     dev_samples = datautils.load_pickle_data(dev_samples_pkl)  #(2000, 7)
+
+    # datautils.save_pickle_data(train_samples[:1000], 'E:/Pycoding/biye/Biye2021/data/fetel-data/results/train.pkl')
+    # datautils.save_pickle_data(dev_samples[:200], 'E:/Pycoding/biye/Biye2021/data/fetel-data/results/dev.pkl')
+
     #mention_token_id=3
     # parent_type_ids_dict={0: [], 1: [54], 2: [], 3: [63], 4: [],......           128
     dev_samples = anchor_samples_to_model_samples(dev_samples, gres.mention_token_id, gres.parent_type_ids_dict)
@@ -97,16 +102,6 @@ def train_fetel(device, gres: exputils.GlobalRes, el_entityvec: ELDirectEntityVe
     test_true_labels_dict = {m['mention_id']: m['labels'] for m in test_mentions} if (
             'labels' in next(iter(test_mentions))) else None
 
-    # person_type_id = gres.type_id_dict.get('/person')
-    l2_person_type_ids, person_loss_vec = None, None
-    # if person_type_id is not None:
-    #     #[1, 21, 22, 24, 27, 28, 56, 76, 84, 95, 110, 119, 121, 125, 127]
-    #     l2_person_type_ids = __get_l2_person_type_ids(gres.type_vocab)
-    #     # Lambda 值，用来计算loss
-    #     person_loss_vec = exputils.get_person_type_loss_vec(
-    #         l2_person_type_ids, gres.n_types, per_penalty, model.device)
-
-    dev_results_file = None
     n_batches = (len(train_samples) + batch_size - 1) // batch_size
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=n_batches, gamma=lr_gamma)
@@ -121,43 +116,25 @@ def train_fetel(device, gres: exputils.GlobalRes, el_entityvec: ELDirectEntityVe
         batch_beg, batch_end = batch_idx * batch_size, min((batch_idx + 1) * batch_size, len(train_samples))
         batch_samples = anchor_samples_to_model_samples(
             train_samples[batch_beg:batch_end], gres.mention_token_id, gres.parent_type_ids_dict)
-        # 训练的时候才添加person   ,entity_vecs返回的是KB type represention
-        # 训练的时候需要 only output the types
-        # if rand_per:
-        #     entity_vecs, el_sgns, el_probs = __get_entity_vecs_for_samples(
-        #         el_entityvec, batch_samples, None, True, person_type_id, l2_person_type_ids, gres.type_vocab)
-        # else:
-        #     entity_vecs, el_sgns, el_probs = __get_entity_vecs_for_samples(el_entityvec, batch_samples, None, True)
         entity_vecs, el_sgns, el_probs = __get_entity_vecs_for_samples(el_entityvec, batch_samples, None, True)#在训练的时候这个实体类型是已经有的。不需要链接
         #16,128  16   16
         use_entity_vecs = True
         model.train()
 
-        # context_token_seqs, mention_token_idxs, mstrs, mstr_token_seqs, y_true
         (context_token_seqs, mention_token_idxs, mstrs, mstr_token_seqs, y_true
          ) = exputils.get_mstr_cxt_label_batch_input(model.device, gres.n_types, batch_samples)
 
-        # if use_entity_vecs:# 训练的时候随机设置 EL 结果为NIL 0
-        #     for i in range(entity_vecs.shape[0]):
-        #         if np.random.uniform() < nil_rate:
-        #             entity_vecs[i] = np.zeros(entity_vecs.shape[1], np.float32)
-        #     el_probs = torch.tensor(el_probs, dtype=torch.float32, device=model.device)
-        #     entity_vecs = torch.tensor(entity_vecs, dtype=torch.float32, device=model.device)
-        # else:
-        #     entity_vecs = None
         el_probs = torch.tensor(el_probs, dtype=torch.float32, device=model.device)
         entity_vecs = torch.tensor(entity_vecs, dtype=torch.float32, device=model.device)
         t = model(context_token_seqs, mention_token_idxs, mstr_token_seqs, entity_vecs, el_probs)
 
-        # logits= s(m,t)
         loss = model.cross_entropy(t,y_true)#16,128
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0, float('inf'))
         optimizer.step()
         scheduler.step()
-        losses.append(loss.data.cpu().numpy())
-
+        losses.append(loss.data.cpu().numpy().item())
         step += 1
         if step % 1 == 0:
             # logging.info('i={} l={:.4f}'.format(step + 1, sum(losses)))
@@ -184,10 +161,15 @@ def train_fetel(device, gres: exputils.GlobalRes, el_entityvec: ELDirectEntityVe
             # if results_file is not None and acc_v > best_dev_acc:
             #     datautils.save_json_objs(test_results, results_file)
             #     logging.info('test reuslts saved {}'.format(results_file))
-
-            if acc_v > best_dev_acc:
-                best_dev_acc = acc_v
-            losses = list()
+            # datautils.save_json_objs(dev_results, dev_results_file)
+            # logging.info('dev reuslts saved {}'.format(dev_results_file))
+            # datautils.save_json_objs(test_results, test_results_file)
+            # logging.info('test reuslts saved {}'.format(test_results_file))
+            # if acc_v > best_dev_acc:
+            #     best_dev_acc = acc_v
+            # losses = list()
+            # with open("temp.txt", 'w') as f:
+            #     f.write(str(losses))
 
 
 def eval_fetel(gres: exputils.GlobalRes, model, samples: List[ModelSample], entity_vecs, el_probs, batch_size=32,
@@ -216,13 +198,12 @@ def eval_fetel(gres: exputils.GlobalRes, model, samples: List[ModelSample], enti
         if single_type_path:
             preds = model.inference(logits)
         else:
-            preds = model.inference_full(logits, extra_label_thres=0.8)
+            preds = model.inference_full(logits, extra_label_thres=0.5)
         for j, (sample, type_ids_pred, sample_logits) in enumerate(
                 zip(batch_samples, preds, logits.data.cpu().numpy())):
             labels = utils.get_full_types([gres.type_vocab[tid] for tid in type_ids_pred])
             pred_labels_dict[sample.mention_id] = labels
-            result_objs.append({'mention_id': sample.mention_id, 'labels': labels,
-                                'logits': [float(v) for v in sample_logits]})
+            result_objs.append({'mention_id': sample.mention_id, 'labels': labels})
 
     strict_acc, partial_acc, maf1, mif1 = 0, 0, 0, 0
     if true_labels_dict is not None:
