@@ -198,7 +198,7 @@ def eval_fetel(gres: exputils.GlobalRes, model, samples: List[ModelSample], enti
         if single_type_path:
             preds = model.inference(logits)
         else:
-            preds = model.inference_full(logits, extra_label_thres=0.5)
+            preds = model.inference_full(logits, extra_label_thres=0.8)
         for j, (sample, type_ids_pred, sample_logits) in enumerate(
                 zip(batch_samples, preds, logits.data.cpu().numpy())):
             labels = utils.get_full_types([gres.type_vocab[tid] for tid in type_ids_pred])

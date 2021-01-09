@@ -31,16 +31,6 @@ def inference_labels(l1_type_indices, child_type_vecs, scores):
 class BaseResModel(nn.Module):
     def __init__(self, device, type_vocab, type_id_dict, embedding_layer: nn.Embedding,
                  context_lstm_hidden_dim, type_embed_dim, dropout=0.5, concat_lstm=False):
-        '''
-        :param device:          CPU
-        :param type_vocab:    128大小的list
-        :param type_id_dict:   128大小的dict    /event:0
-        :param embedding_layer: 1107775,300
-        :param context_lstm_hidden_dim:   250
-        :param type_embed_dim:  500
-        :param dropout:         0.5
-        :param concat_lstm:     True
-        '''
         super(BaseResModel, self).__init__()
         self.device = device
         self.context_lstm_hidden_dim = context_lstm_hidden_dim
@@ -71,6 +61,22 @@ class BaseResModel(nn.Module):
                                      hidden_size=self.context_lstm_hidden_dim, bidirectional=True)
         self.context_hidden2 = None
 
+    def get_loss(self, true_type_vecs, t, margin=1.0, person_loss_vec=None):
+        loss = self.criterion(t, true_type_vecs)
+        return loss
+
+    def inference(self, scores, is_torch_tensor=True):
+        if is_torch_tensor:
+            scores = scores.data.cpu().numpy()
+        return inference_labels(self.l1_type_indices, self.child_type_vecs, scores)
+
+    def inference_full(self, logits, extra_label_thres=0.5, is_torch_tensor=True):
+        if is_torch_tensor:
+            logits = logits.data.cpu().numpy()
+        return inference_labels_full(self.l1_type_indices, self.child_type_vecs, logits, extra_label_thres)
+
+    def forward(self, *input_args):
+        raise NotImplementedError
     def init_context_hidden(self, batch_size):
         return modelutils.init_lstm_hidden(self.device, batch_size, self.context_lstm_hidden_dim, True)
 
@@ -96,39 +102,10 @@ class BaseResModel(nn.Module):
         # lstm_output_r = F.dropout(lstm_output_r, self.dropout, training)
         return lstm_output_r
 
-    def get_loss(self, true_type_vecs, t, margin=1.0, person_loss_vec=None):
-        loss = self.criterion(t, true_type_vecs)
-        return loss
-
-    def inference(self, scores, is_torch_tensor=True):
-        if is_torch_tensor:
-            scores = scores.data.cpu().numpy()
-        return inference_labels(self.l1_type_indices, self.child_type_vecs, scores)
-
-    def inference_full(self, logits, extra_label_thres=0.5, is_torch_tensor=True):
-        if is_torch_tensor:
-            logits = logits.data.cpu().numpy()
-        return inference_labels_full(self.l1_type_indices, self.child_type_vecs, logits, extra_label_thres)
-
-    def forward(self, *input_args):
-        raise NotImplementedError
-
 
 class FETELStack(BaseResModel):
     def __init__(self, device, type_vocab, type_id_dict, embedding_layer: nn.Embedding, context_lstm_hidden_dim,
                  type_embed_dim, dropout=0.5, use_mlp=False, mlp_hidden_dim=None, concat_lstm=False):
-        '''
-        :param device:          CPU
-        :param type_vocab:    128大小的list
-        :param type_id_dict:   128大小的dict    /event:0
-        :param embedding_layer: 1107775,300
-        :param context_lstm_hidden_dim:   250
-        :param type_embed_dim:  500
-        :param dropout:         0.5
-        :param use_mlp:         True
-        :param mlp_hidden_dim:  500
-        :param concat_lstm:     True
-        '''
         super(FETELStack, self).__init__(device, type_vocab, type_id_dict, embedding_layer,
                                          context_lstm_hidden_dim, type_embed_dim, dropout, concat_lstm)
         self.use_mlp = use_mlp
@@ -152,6 +129,19 @@ class FETELStack(BaseResModel):
             # self.linear_map3 = nn.Linear(mlp_hidden_dim, type_embed_dim)#(500,500)
             self.linear_map3 = nn.Linear(linear_map_input_dim, mlp_hidden_dim,True)#(500,500)
             self.linear_map4 = nn.Linear(mlp_hidden_dim, self.n_types,True)#(500,500)
+
+        # self.elmo_dim = self.elmo.get_output_dim()
+        # self.attn_dim = 1
+        # self.attn_inner_dim = self.elmo_dim
+        # # Mention attention
+        # self.men_attn_linear_m = nn.Linear(self.elmo_dim, self.attn_inner_dim, bias=False)
+        # self.men_attn_linear_o = nn.Linear(self.attn_inner_dim, self.attn_dim, bias=False)
+        # # Context attention
+        # self.ctx_attn_linear_c = nn.Linear(self.elmo_dim, self.attn_inner_dim, bias=False)
+        # self.ctx_attn_linear_m = nn.Linear(self.elmo_dim, self.attn_inner_dim, bias=False)
+        # self.ctx_attn_linear_d = nn.Linear(1, self.attn_inner_dim, bias=False)
+        # self.ctx_attn_linear_o = nn.Linear(self.attn_inner_dim,
+        #                                    self.attn_dim, bias=False)
     def cross_entropy(self, predicted, truth):
         return -torch.sum(truth * torch.log(predicted + 1e-10)) \
                - torch.sum((1 - truth) * torch.log(1 - predicted + 1e-10))
@@ -163,11 +153,14 @@ class FETELStack(BaseResModel):
         context_lstm_output = self.get_context_lstm_output(
             context_token_seqs, seq_lens, mention_token_idxs, batch_size)#16,500
         context_lstm_output = context_lstm_output[back_idxs]
+
+
         name_output = modelutils.get_avg_token_vecs(self.device, self.embedding_layer, mstr_token_seqs)#16,300
 
         cat_output = self.dropout_layer(torch.cat((context_lstm_output, name_output), dim=1)) #16,800  参数的顺序好像是反的，应该mention在前面
 
-        l1_output = torch.tanh(self.linear_map1(name_output))#应该用name_output
+        # l1_output = torch.tanh(self.linear_map1(name_output))#应该用name_output
+        l1_output = self.linear_map1(name_output).tanh()
         vq = torch.relu(self.linear_map2(l1_output)) #16,128   dropout
 
         min_entity_vecs=torch.full_like(entity_vecs,-10)
